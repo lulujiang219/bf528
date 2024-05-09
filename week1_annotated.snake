@@ -1,0 +1,105 @@
+# Here I make an explicit list of all of the name patterns that will allow me to construct the requested files
+# I usually try to construct patterns with the least amount of wildcards, so you can see that the {sample} wildcard
+# will eventually be detected as the entire name including timepoint, rep, and subsample (i.e. P0rep1subsample is one
+# possible wildcard) 
+
+# I also make a small list with the possible values for paired end reads which are typically named R1 and R2, representing
+# both pairs of reads coming from a sample
+
+# Stylistically, I have named these python variables in uppercase to be explicit about what they represent
+
+FILES = ['P0rep1subsample', 'P0rep2subsample', 'P4rep1subsample', 'P4rep2subsample', 'P7rep1subsample', 'P7rep2subsample', 'ADrep1subsample', 'ADrep2subsample']
+READS = ['R1', 'R2']
+
+
+# rule all
+#
+# As long as you link the dependencies in the input and output rules correctly, snakemake will automatically generate
+# any intermediate files necessary to create your target output. You can see that in my rule all, I have only specified
+# that I want the file "results/multiqc_report.html" to be created.
+#
+# As you will see below, because I have linked the input and outputs of my rule fastqc and rule multiqc, snakemake will
+# automatically generate any intermediate, required files to create the target output. In this case, snakemake will
+# know to generate all of the fastqc outputs in order to be able to generate the multiqc output 
+#
+# As we discussed, multiqc simply aggregates the results from multiple samples / files into a single file. Since we want
+# multiqc to aggregate the results from all of our files, all of those files need to exist before we run multiqc.
+
+rule all:
+	input:
+		'results/multiqc_report.html'
+
+# rule fastqc
+
+# Remember that snakemake operates on files. You can either run programs on our small subsetted files or look at their
+# manual page, "<name_of_tool> -h" or "fastqc -h", to determine what output files they generate. You can also look online
+# for their associated documentation.
+
+# You can also see that I have used the params directive to specify the output directory where I want the fastqc outputs
+# to be created. I still need to specify the output file and where I expect it to be created in the `output` in snakemake.
+# This is because fastqc only accepts a directory where it will output files, and it will produce them named automatically
+# in the specified directory. fastqc will generate a HTML file that takes the original file name, removes the file extension, 
+# and appends the extension "_fastqc.html". In my shell command, I am telling fastqc to create its output in the `results/`
+# directory and I tell snakemake to expect that exact output based on where I am telling fastqc to generate its output (-o results/) and
+# my knowledge of how fastqc names its outputs (<original_name_without_ext>_fastqc.html)   
+
+rule fastqc:
+	input:
+		fastq = 'samples/{sample}_{read}.fastq.gz',
+	output:
+		html = 'results/{sample}_{read}_fastqc.html'
+	params:
+		outdir = 'results/'
+	shell:
+		'fastqc {input.fastq} -o {params.outdir}'
+
+# rule multiqc
+#
+# You can see that I an using the expand() function in the input to this rule. Remember that the expand() function
+# generates a simple list by creating a cross-product of all the strings provided in the function. This expand function
+# will exactly create the following list:
+#
+#['P0rep1subsample_R1_fastqc.html',
+# 'P0rep1subsample_R2_fastqc.html',
+# 'P0rep2subsample_R1_fastqc.html',
+# 'P0rep2subsample_R2_fastqc.html',
+# 'P4rep1subsample_R1_fastqc.html',
+# 'P4rep1subsample_R2_fastqc.html',
+# 'P4rep2subsample_R1_fastqc.html',
+# 'P4rep2subsample_R2_fastqc.html',
+# 'P7rep1subsample_R1_fastqc.html',
+# 'P7rep1subsample_R2_fastqc.html',
+# 'P7rep2subsample_R1_fastqc.html',
+# 'P7rep2subsample_R2_fastqc.html',
+# 'ADrep1subsample_R1_fastqc.html',
+# 'ADrep1subsample_R2_fastqc.html',
+# 'ADrep2subsample_R1_fastqc.html',
+# 'ADrep2subsample_R2_fastqc.html']
+
+# We have provided a list as an input to this rule ONLY because we want multiqc to run after fastqc has run on ALL
+# the original 16 fastq files. By using this as our input, snakemake will wait until all 16 of these files exist, 
+# which naturally means that fastqc will have run on all of the files we specified. We want multiqc to only run after
+# fastqc has been run on all files because multiqc is aggregating the results together from all of these files. If we 
+# want them included in our multiqc_report, they all need to exist before multiqc runs.
+#
+# For tasks where we do not need all the results to exist before performing a task, we do not use expand(). For example,
+# in Week 2, you will need to align 8 samples to the genome to create 8 BAM files. On each of those BAM files, we will
+# run samtools flagstat to calculate the alignment statistics. To run samtools flagstats, we do not need all of the BAMs
+# to exist, we can run samtools flagstats as soon as at least one BAM file exists. 
+#
+# You can see once again that we had to manually figure out how multiqc names its output file, and we also needed to specify
+# where it outputs this file. From looking at the documentation, multiqc needs to be provided the directory you want it to 
+# scan (the one where all of our fastqc outputs are produced) and the directory where it creates its report. We have used a
+# single param, outdir, which allows us to specify both the directory multiqc should look into and where it should create its
+# output. Again, we had to specify in snakemake the file we want produced, and we did so using our knowledge of how multiqc
+# names its output and directly requesting the program to produce its output in the specified results/ directory.
+
+rule multiqc:
+	input:
+		expand('results/{sample}_{read}_fastqc.html', sample=FILES, read=READS)
+	output:
+		report = 'results/multiqc_report.html'
+	params:
+		outdir = 'results/'
+	shell:
+		'multiqc {params.outdir} -o {params.outdir}'

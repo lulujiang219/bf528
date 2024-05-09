@@ -1,0 +1,149 @@
+# Just like last week, we initialize a list that contains our desired sample names. 
+# We will use expand() to generate a list of the final files we desire to be created.
+# In project 2, we will discuss a more programmatic way of storing file information and 
+# driving a snakemake workflow from a CSV.
+
+NAMES = ['P0rep1subsample', 'P0rep2subsample', 'P4rep1subsample', 'P4rep2subsample', 'P7rep1subsample', 'P7rep1subsample', 'ADrep1subsample', 'ADrep2subsample']
+
+
+# You can see that we have specified multiple files to be created in the rule all
+# input separated by a comma. Some of our output files are not dependent on each 
+# other in order to exist. For example, unzipping our gtf.gz is not required to do
+# any of our other tasks so we have to explicitly list it here as another desired
+# output. You'll notice, however, that we do not need to specify the intermediate
+# file gencode.vM33.primary_assembly.annotation.gtf.gz (the original downloaded file)
+# since it is an intermediate and will be downloaded in the course of generating the
+# decompressed gencode.vM33.primary_assembly.annotation.gtf. This decompressed file
+# cannot be created until the original is downloaded and because we have linked our
+# files in the input and outputs of rules wget_m39_gtf and unzip, snakemake will
+# understand that it first needs to run rule wget_m39_gtf before it can run rule unzip
+
+rule all:
+	input:
+		'results/GRCm39.primary_assembly.genome.fa.gz',
+		'results/gencode.vM33.primary_assembly.annotation.gtf',
+		expand('results/{names}_flagstats.txt', names=NAMES)
+
+
+# We use the -P flag to specify the directory output for the downloaded file. Without
+# this option, wget would download to the CWD where the snakefile is running, but we
+# want our output in the results/ directory. 
+
+rule wget_m39:
+	output:
+		'results/GRCm39.primary_assembly.genome.fa.gz'
+	params:
+		ftp_path = 'https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M33/GRCm39.primary_assembly.genome.fa.gz'
+	shell:
+		'''
+		wget -p results/ {params.ftp_path}
+		'''
+
+rule wget_m39_gtf:
+	output:
+		'results/gencode.vM33.primary_assembly.annotation.gtf.gz'
+	params:
+		ftp_path = 'https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M33/gencode.vM33.primary_assembly.annotation.gtf.gz'
+	shell:
+		'''
+		wget -p results/ {params.ftp_path}
+		'''
+# The gunzip command has the flag -c, which keeps the original file unmodified and
+# pipes the decompressed output to stdout. We use the standard > (redirect) to capture
+# this stdout and write it to a new file where we remove the .gz to indicate it is no
+# longer binary compressed. You could have also accomplished this using any other standard
+# decompression tool. The important part here was to retain the original file or snakemake
+# will notice it's missing in subsequent runs and try to redownload it as by default
+# most decompression utilities do not retain the original file.
+
+rule unzip:
+	input:
+		gz = 'results/gencode.vM33.primary_assembly.annotation.gtf.gz'
+	output:
+		gtf = 'results/gencode.vM33.primary_assembly.annotation.gtf'
+	shell:
+		'''
+		gunzip -c {input.gz} > {output.gtf}
+		'''
+
+# A couple of things to note. The STAR manual is massive and is extraordinarily difficult
+# to parse. I asked you to try so as to give you experience in learning how to use a new
+# tool. In any future job, there may be many times when you will have to learn how to implement
+# an analysis or use a tool with no one to guide you. Getting used to reading and parsing these
+# manuals will be valuable for you in the future.
+
+# There are three important pieces of the command that may have given you issues.
+# 1. Remember that our reads are paired-end (two reads per fragment for each sample). We want
+#    to make STAR aware that our reads are paired-end to take advantage of the extra information
+#    it can provide us when aligning reads to a genome. To do this in STAR, you simply provide the
+#    read pairs together for a sample separated by a space after the --readFilesIn command. Your
+#    workflow should have run STAR 8 times, one for each of our biological samples.
+#
+# 2. Some bioinformatics utilities will automatically recognize compressed files, others will not.
+#    STAR falls under the latter category. You need to include the flag --readFilesCommand zcat,
+#    which will instruct STAR to use zcat to decompress the fastqs while reading them in and subsequently
+#    aligning them to the genome.
+#
+# 3. STAR names it output files in a particular fashion by using a provided prefix and automatically
+#    appending a suffix based on your output. In our case, you were asked to produce an unsorted BAM.
+#    STAR will produce an output with the following pattern <provided_prefix>.Aligned.out.bam when using the
+#    --outFileNamePrefix <provided_prefix> flag. 
+#    
+#    Remember that your input and outputs in snakemake **must** be files that exist or will eventually exist.
+#    You can see that we have a problem because STAR wants just the **prefix** and not the full file name. The
+#    output **must** be the full file name.
+#    
+#    Let's take the file samples/P0rep1subsample_R1.fastq.gz. If we were to try to substitute in the value in the 
+#    output directive, {output.bam} in the STAR command, STAR would produce the file 
+#    results/P0rep1subsample.Aligned.out.bam.Aligned.out.bam and snakemake would throw an error because it expects
+#    the file results/P0rep1subsample.Aligned.out.bam to exist (as specified in the output)
+#
+#    The actual command would look something like this:
+#
+#    '''
+#    STAR ... --outFileNamePrefix results/P0rep1subsample.Aligned.out.bam
+#    '''
+#
+#    We can get around this by using the params directive, which has access to the same wildcards in the input
+#    and output but is not tied to file creation (only inputs and outputs are checked). We specify a value in
+#    params as 'results/{name}. At execution, using the sample example (samples/P0rep1subsample_R1.fastq.gz), the value
+#    of the wildcard {name} will be determined to be P0rep1subsample and the command will become:
+#
+#    '''
+#    STAR ... --outFileNamePrefix results/P0rep1subsample.
+#    '''
+#
+#    STAR will now properly produce a file named exactly results/P0rep1subsample.Aligned.out.bam and snakemake will
+#    run successfully. 
+
+rule star:
+	input:
+		r1 = 'samples/{name}_R1.fastq.gz',
+		r2 = 'samples/{name}_R2.fastq.gz',
+		star_dir = 'results/m39_subset_star/'
+	output:	
+		bam = 'results/{name}.Aligned.out.bam'
+	params:
+		prefix = 'results/{name}.'
+	shell:
+		'''
+		STAR --genomeDir {input.star_dir} --readFilesIn {input.r1} {input.r2} --readFilesCommand zcat --outSAMtype BAM Unsorted --outFileNamePrefix {params.prefix}
+		'''
+
+# By default, all samtools utilities print their output to stdout, and we have again
+# made use of > to redirect this output and write it to a new file. You could have
+# named this file anything you'd like, but as always, you should endeavor to name
+# files descriptively in a way that makes it easily apparent what operation was 
+# performed on them. I chose to append the suffix '_flagstats.txt' and manually wrote
+# these outputs to these specified files and which match the names in the output in snakemake
+# When this job has run successfully, snakemake will expect these files to exist and
+# since we are using the > utility, we can manually name our files to ensure they match
+# what we're creating and what snakemake expects to be created.
+
+rule samtools_flagstat:
+	input:
+		bam = 'results/{name}.Aligned.out.bam'
+	output:
+		flagstats = 'results/{name}_flagstats.txt'
+	shell:
+		'samtools flagstats {input.bam} > {output.flagstats}'
